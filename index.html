@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="only light">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Free AI Video Upscaler</title>
+<script src="https://cdn.jsdelivr.net/npm/webm-muxer@5.0.2/build/webm-muxer.js"></script>
+<style>
+:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f6f7fb;--card:#fff;--ink:#1d2433;--mut:#667085;--line:#dfe3ec;--acc:#3b5bdb}
+html{background:#f6f7fb;color:#1d2433;color-scheme:only light;scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:20px}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:24px;margin:0 0 4px}
+p.sub{margin:0 0 18px;color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+#drop{border:2px dashed var(--line);border-radius:12px;padding:36px 16px;text-align:center;cursor:pointer;color:var(--mut)}
+#drop.over{border-color:var(--acc);background:#eef2ff}
+.row{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end}
+label{font-size:14px;color:var(--mut);display:flex;flex-direction:column;gap:6px}
+select,input[type=number]{padding:8px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);min-width:110px}
+button,a.btn{background:var(--acc);color:#fff;border:0;border-radius:10px;padding:11px 20px;font-size:15px;cursor:pointer;text-decoration:none;display:inline-block}
+button:disabled{opacity:.5;cursor:default}
+video{width:100%;max-height:420px;border-radius:10px;background:#000}
+progress{width:100%;height:14px}
+.hide{display:none}
+#info{font-size:14px;color:var(--mut);margin:10px 0 0}
+.warn{font-size:13px;color:#8a5a00;background:#fff6e0;border:1px solid #f1d9a0;border-radius:8px;padding:8px 10px;margin-top:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:640px){.grid{grid-template-columns:1fr}}
+h3{margin:0 0 8px;font-size:15px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Free AI Video Upscaler</h1>
+  <p class="sub">Enlarge videos up to 4× in your browser with an open-source AI model (ESRGAN). No login, no limits, and your video never leaves your device.</p>
+
+  <div class="card">
+    <div id="drop">Drop a video here, or tap to choose one (MP4, WebM, MOV)</div>
+    <input id="file" type="file" accept="video/*" class="hide">
+  </div>
+
+  <div class="card hide" id="ctl">
+    <div class="row">
+      <label>Scale
+        <select id="scale"><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option></select>
+      </label>
+      <label>Engine
+        <select id="eng"><option value="fast">Fast (smooth + sharpen)</option><option value="ai">AI (ESRGAN, very slow)</option></select>
+      </label>
+      <label>Frame rate
+        <select id="fps"><option>24</option><option selected>30</option><option>60</option></select>
+      </label>
+      <label>Sharpening
+        <select id="sharp"><option value="0">None</option><option value="0.3" selected>Light</option><option value="0.7">Medium</option><option value="1.2">Strong</option></select>
+      </label>
+      <label id="msl" class="hide">AI: max seconds
+        <input id="maxsec" type="number" min="1" max="60" value="5">
+      </label>
+      <button id="go">Upscale video</button>
+    </div>
+    <div class="warn hide" id="aiwarn">AI mode runs the model on every frame and can take many seconds per frame. Start with a short clip (a few seconds) at low resolution.</div>
+    <progress id="prog" value="0" max="1" class="hide"></progress>
+    <p id="info"></p>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div><h3>Original</h3><video id="src" controls playsinline muted></video></div>
+      <div class="hide" id="outbox"><h3>Upscaled</h3><video id="res" controls playsinline></video>
+        <p><a id="dl" class="btn" download="upscaled.webm">Download WebM</a></p></div>
+    </div>
+    <p style="font-size:13px;color:var(--mut);margin:12px 0 0">Needs Chrome, Edge or another browser with WebCodecs. Output is a silent WebM file (audio is not carried over).</p>
+  </div>
+</div>
+
+<script>
+(function(){
+  var $=function(i){return document.getElementById(i)};
+  var v=$('src'), file=$('file'), drop=$('drop');
+  var MAXSIDE=3840, cache={};
+
+  drop.onclick=function(){file.click()};
+  drop.ondragover=function(e){e.preventDefault();drop.classList.add('over')};
+  drop.ondragleave=function(){drop.classList.remove('over')};
+  drop.ondrop=function(e){e.preventDefault();drop.classList.remove('over');load(e.dataTransfer.files[0])};
+  file.onchange=function(){load(file.files[0])};
+  $('eng').onchange=function(){var a=this.value==='ai';$('msl').classList.toggle('hide',!a);$('aiwarn').classList.toggle('hide',!a)};
+
+  function load(f){
+    if(!f||!f.type.startsWith('video/'))return;
+    v.src=URL.createObjectURL(f);
+    v.onloadedmetadata=function(){
+      $('ctl').classList.remove('hide');$('outbox').classList.add('hide');
+      $('info').textContent='Loaded: '+v.videoWidth+' × '+v.videoHeight+' px, '+v.duration.toFixed(1)+' s';
+    };
+  }
+
+  // ---------- AI engine (UpscalerJS + ESRGAN, loaded on demand; needs a normal web host) ----------
+  var TFU='https://esm.sh/@tensorflow/tfjs@4.22.0';
+  var UPU='https://esm.sh/upscaler?deps=@tensorflow/tfjs@4.22.0';
+  var MODEL=function(s){return 'https://esm.sh/@upscalerjs/esrgan-medium/'+s+'x?deps=@tensorflow/tfjs@4.22.0'};
+  async function getAI(s){
+    if(!cache.U){await import(TFU);cache.U=(await import(UPU)).default;}
+    if(!cache[s]){var m=(await import(MODEL(s))).default;cache[s]=new cache.U({model:m});}
+    return cache[s];
+  }
+
+  // ---------- WebGL sharpen pass ----------
+  function makeGL(W,H){
+    var c=document.createElement('canvas');c.width=W;c.height=H;
+    var gl=c.getContext('webgl',{preserveDrawingBuffer:true,premultipliedAlpha:false});
+    function sh(t,s){var o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);return o}
+    var p=gl.createProgram();
+    gl.attachShader(p,sh(gl.VERTEX_SHADER,'attribute vec2 a;varying vec2 u;void main(){u=vec2(a.x*.5+.5,.5-a.y*.5);gl_Position=vec4(a,0.,1.);}'));
+    gl.attachShader(p,sh(gl.FRAGMENT_SHADER,'precision mediump float;varying vec2 u;uniform sampler2D t;uniform vec2 px;uniform float k;void main(){vec3 c=texture2D(t,u).rgb;vec3 n=texture2D(t,u+vec2(px.x,0.)).rgb+texture2D(t,u-vec2(px.x,0.)).rgb+texture2D(t,u+vec2(0.,px.y)).rgb+texture2D(t,u-vec2(0.,px.y)).rgb;gl_FragColor=vec4(clamp(c+k*(4.*c-n),0.,1.),1.);}'));
+    gl.linkProgram(p);gl.useProgram(p);
+    var b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+    var a=gl.getAttribLocation(p,'a');gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
+    var tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);
+    [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER].forEach(function(q){gl.texParameteri(gl.TEXTURE_2D,q,gl.LINEAR)});
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.uniform2f(gl.getUniformLocation(p,'px'),1/W,1/H);
+    var kl=gl.getUniformLocation(p,'k');
+    gl.viewport(0,0,W,H);
+    return {canvas:c,draw:function(src,k){
+      gl.uniform1f(kl,k);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,src);
+      gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+    }};
+  }
+
+  function seek(t){return new Promise(function(r){v.onseeked=function(){r()};v.currentTime=t})}
+
+  $('go').onclick=async function(){
+    if(!window.VideoEncoder||!window.WebMMuxer){$('info').textContent='This browser does not support WebCodecs. Please use Chrome or Edge.';return}
+    var s=+$('scale').value,fps=+$('fps').value,ai=$('eng').value==='ai',k=+$('sharp').value;
+    var dur=ai?Math.min(v.duration,+$('maxsec').value||5):v.duration;
+    var W=v.videoWidth*s,H=v.videoHeight*s;
+    if(Math.max(W,H)>MAXSIDE){var f=MAXSIDE/Math.max(W,H);W*=f;H*=f}
+    W=Math.floor(W/2)*2;H=Math.floor(H/2)*2;
+    var n=Math.floor(dur*fps),btn=$('go');
+    btn.disabled=true;btn.textContent='Working…';$('prog').classList.remove('hide');$('prog').value=0;$('outbox').classList.add('hide');
+    v.pause();
+    try{
+      var codec='vp09.00.51.08';
+      var sup=await VideoEncoder.isConfigSupported({codec:codec,width:W,height:H});
+      if(!sup.supported)throw new Error('Video encoder does not support '+W+'×'+H+' here. Try a smaller scale.');
+      var muxer=new WebMMuxer({target:'buffer',video:{codec:'V_VP9',width:W,height:H,frameRate:fps}});
+      var enc=new VideoEncoder({output:function(c,m){muxer.addVideoChunk(c,m)},error:function(e){throw e}});
+      enc.configure({codec:codec,width:W,height:H,bitrate:Math.min(40e6,Math.round(W*H*fps*0.1)),framerate:fps});
+      var gl=makeGL(W,H);
+      var work=document.createElement('canvas');work.width=W;work.height=H;
+      var wx=work.getContext('2d');wx.imageSmoothingEnabled=true;wx.imageSmoothingQuality='high';
+      var nat=document.createElement('canvas');nat.width=v.videoWidth;nat.height=v.videoHeight;
+      var nx=nat.getContext('2d');
+      var up=null;
+      if(ai){$('info').textContent='Loading AI model (first run downloads a few MB)…';up=await getAI(s)}
+      var t0=performance.now();
+      for(var i=0;i<n;i++){
+        await seek(i/fps);
+        if(ai){
+          nx.drawImage(v,0,0);
+          var data=await up.upscale(nat,{patchSize:64,padding:4});
+          var im=new Image();im.src=data;await im.decode();
+          wx.drawImage(im,0,0,W,H);
+        }else{
+          wx.drawImage(v,0,0,W,H);
+        }
+        gl.draw(work,k);
+        var fr=new VideoFrame(gl.canvas,{timestamp:Math.round(i*1e6/fps),duration:Math.round(1e6/fps)});
+        enc.encode(fr,{keyFrame:i%60===0});fr.close();
+        while(enc.encodeQueueSize>4)await new Promise(function(r){setTimeout(r,10)});
+        $('prog').value=(i+1)/n;
+        var el=(performance.now()-t0)/1000,eta=el/(i+1)*(n-i-1);
+        $('info').textContent='Frame '+(i+1)+' of '+n+' · about '+Math.ceil(eta)+' s left';
+      }
+      await enc.flush();muxer.finalize();
+      var blob=new Blob([muxer.target.buffer],{type:'video/webm'});
+      var url=URL.createObjectURL(blob);
+      $('res').src=url;$('dl').href=url;$('outbox').classList.remove('hide');
+      $('info').textContent='Done: '+v.videoWidth+'×'+v.videoHeight+' → '+W+'×'+H+' px, '+n+' frames'+(ai?' (AI)':'');
+    }catch(e){
+      console.error(e);
+      $('info').textContent=(ai?'AI mode failed. The model must load from a normal website with internet access, so try the Fast engine. ':'Something went wrong. ')+(e&&e.message?e.message:'');
+    }
+    btn.disabled=false;btn.textContent='Upscale video';
+  };
+})();
+</script>
+</body>
+</html>
